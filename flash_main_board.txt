@@ -1,0 +1,1 @@
+.\avrdude.exe -c usbasp -p atmega168p -U flash:w:sketch.ino.hex
