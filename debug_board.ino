@@ -6,7 +6,7 @@
 // Add your custom file using "Sketch" -> "Add file"
 #include "data/credentials.h"
 
-const unsigned long INTERVAL = 5000;  // delay between main loop steps
+const unsigned long INTERVAL = 1000;  // delay between main loop steps
 
 X509List cert(TELEGRAM_CERTIFICATE_ROOT);
 WiFiClientSecure secured_client;
@@ -21,24 +21,27 @@ String foo;
 RS 485
 **************/
 //https://docs.arduino.cc/learn/built-in-libraries/software-serial
-#include <SoftwareSerial.h>
+//#include <SoftwareSerial.h>
+//#define RX_PIN D5
+//#define TX_PIN D6
+//SoftwareSerial RS485(RX_PIN, TX_PIN, false, 128);
 
-#define RX_PIN D5
-#define TX_PIN D6
-SoftwareSerial RS485(RX_PIN, TX_PIN);
+#define MAX485_RE_DE D2
 
 /**************
 Modbus
 **************/
 //https://github.com/emelianov/modbus-esp8266
 #include <ModbusRTU.h>
+ModbusRTU mb;
 
 #define NUM_COILS 1 // Security alarm relay state
 #define NUM_DISCRETE_INPUTS 4 // Channels alarm statuses
 #define NUM_INPUT_REGISTERS 4 // Current channels ADC values
 #define NUM_HOLDING_REGISTERS 4 // Parameters for calculating alarm for channels
 
-ModbusRTU mb;
+//#include "ModbusMaster.h"
+//ModbusMaster node;
 
 /**************
 I2C Display
@@ -91,7 +94,7 @@ void setupDisplay() {
 }
 
 void setupRS485() {
-  pinMode(RX_PIN, INPUT);
+  /*pinMode(RX_PIN, INPUT);
   pinMode(TX_PIN, OUTPUT);
   RS485.begin(9600, SWSERIAL_8N1);
   if (!RS485) {
@@ -99,17 +102,24 @@ void setupRS485() {
     while (1) {
       delay(1000);
     }
-  }
+  }*/
+  pinMode(MAX485_RE_DE, OUTPUT);
+  digitalWrite(MAX485_RE_DE, LOW); // recieve mode
+  Serial.begin(115200, SERIAL_8N1);
+  Serial.swap(); // switch pins to D7 and D8
 }
 
-bool cbWrite(Modbus::ResultCode event, uint16_t transactionId, void* data) {
+/*bool cbWrite(Modbus::ResultCode event, uint16_t transactionId, void* data) {
   Serial.printf_P("Request result: 0x%02X, Mem: %d\n", event, ESP.getFreeHeap());
   return true;
-}
+}*/
 
 void setupModbus() {
-  mb.begin(&RS485);
-  mb.server();
+  mb.begin(&Serial, MAX485_RE_DE);
+  mb.setBaudrate(115200);
+  mb.client();
+  //mb.master();
+  //node.begin(16, RS485);
 }
 
 void setup() {
@@ -121,24 +131,26 @@ void setup() {
   setupModbus();
 }
 
-bool coils[20];
+uint16_t fooBar;
+uint16_t slaveId = 16;
 void loop() {
   currentMillis = millis();
   if (currentMillis - previousMillis >= INTERVAL) {
     previousMillis = currentMillis;  
 
     if (!mb.slave()) {
-      mb.readCoil(1, 1, coils, 20, cbWrite);
+      uint16_t res = mb.readHreg(slaveId, 1, &fooBar);
+      foo = "Register readed: " + String(fooBar) + ". From slave: " + String(slaveId);
+      logToChat(foo);
     }
-    mb.task();
-
-    //logToChat("Polled at " + getCurrentTime());
-
     display.clear();
     display.setFont(ArialMT_Plain_10);
     display.setTextAlignment(TEXT_ALIGN_LEFT);
     display.drawString(20, 30, getCurrentTime());
     display.display();
-  } else
-    delay(INTERVAL - (currentMillis - previousMillis)); // correct because places in else statement
+  } //else
+    //delay(INTERVAL - (currentMillis - previousMillis)); // correct because places in else statement
+
+  mb.task();
+  yield();
 }

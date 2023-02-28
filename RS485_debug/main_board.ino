@@ -28,8 +28,13 @@ const int ALARM_VAL_COUNT = 70; // Какой процент значений в
 const int ALARM_THRESHOLD_VAL = 100; // Пороговое значние, ниже которого считается что пропал сигнал с датчика
 
 int b[CHANNELS][BUF_CAP] = {{}};
+
 uint16_t state = 0, prevState = 0;
+
 String foo;
+
+//char buf[2048] = {};
+//size_t count=0;
 
 //---------------------------------------
 
@@ -104,7 +109,9 @@ void decodeStates(uint16_t const state, bool& isAlarm, bool* inputStates) {
 
 void setup() {
   pinMode(MAX485_RE_DE, OUTPUT);
-  Serial.begin(9600);
+  digitalWrite(MAX485_RE_DE, LOW);
+  Serial.begin(115200, SERIAL_8N1);
+
   for (uint8_t i=0; i<CHANNELS; ++i)
     pinMode(tLed[i], OUTPUT); 
   pinMode(t[RELAY], OUTPUT); 
@@ -119,14 +126,13 @@ void setup() {
 }
 
 void sendState(int16_t val) {
-    beginTransmission();
-    Serial.println(String(state));
-    endTransmission();
+    sendString(String(state));
 }
 
 void sendString(String const& s) {
     beginTransmission();
     Serial.println(s);
+    Serial.flush();
     endTransmission();
 }
 
@@ -161,14 +167,16 @@ void checkADCs() {
 void loop() {
   currentMillis = millis();
   if(currentMillis - previousMillis >= INTERVAL) {
-    previousMillis = currentMillis;  
-
+    previousMillis = currentMillis;
     checkADCs();
-
-    foo = Serial.readString();
-    foo.trim();
-    foo = "Readed: <" + foo + ">. State: <" + String(state) + ">";
-    sendString(foo);
     prevState = state;
+    
+    if (Serial.available()>0) {
+      foo = Serial.readString();
+      foo.trim();
+      foo = "Readed: <" + foo + ">. State: <" + String(state) + ">";
+      sendString(foo);    
+    }
   }
+  
 }

@@ -1,0 +1,5 @@
+Modbus
+https://mcs.mail.ru/blog/modbus-dlya-m2m-vzaimodejstviya
+
+Wemos D1 R2 tricks
+https://www.weigu.lu/microcontroller/tips_tricks/esp8266_tips_tricks/

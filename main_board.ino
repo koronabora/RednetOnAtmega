@@ -75,15 +75,14 @@ Modbus
 **************/
 //https://github.com/emelianov/modbus-esp8266
 #include <ModbusRTU.h>
+ModbusRTU mb;
 
-#define SLAVE_ID 1
+#define SLAVE_ID 16
 
 #define NUM_COILS 1 // Security alarm relay state
 #define NUM_DISCRETE_INPUTS 4 // Channels alarm statuses
 #define NUM_INPUT_REGISTERS 4 // Current channels ADC values
 #define NUM_HOLDING_REGISTERS 4 // Parameters for calculating alarm for channels
-
-ModbusRTU mb;
 
 /**************
 Bitmasks
@@ -120,7 +119,7 @@ void decodeStates(uint16_t const state, bool& isAlarm, bool* inputStates) {
 
 void setupSerial() {
   pinMode(MAX485_RE_DE, OUTPUT);
-  Serial.begin(9600);
+  Serial.begin(115200, SERIAL_8N1);
 }
 
 void setupMisc() {
@@ -139,10 +138,9 @@ void setupMisc() {
 
 void setupModbus() {
   mb.begin(&Serial, MAX485_RE_DE);  //or use RX/TX direction control pin (if required)
-  mb.setBaudrate(9600);
-  mb.slave(SLAVE_ID);
-  
-  mb.addCoil(1);
+  mb.setBaudrate(115200);
+  mb.server(SLAVE_ID);
+  mb.addHreg(1, 64);
 }
 
 void setup() {
@@ -191,7 +189,7 @@ void checkADCs() {
     state |= ALARM_STATE_MASK; // enable
 }
 
-bool bar = false;
+uint16_t loopStep = 0;
 void loop() {
   currentMillis = millis();
   if (currentMillis - previousMillis >= INTERVAL) {
@@ -200,11 +198,11 @@ void loop() {
     checkADCs();
     prevState = state;
     
-    bar = !bar;
-    mb.writeCoil(SLAVE_ID, 1, bar);
-    
-    mb.task();
-    
-  } else
-    delay(INTERVAL - (currentMillis - previousMillis)); // correct because places in else statement
+    loopStep++;
+    mb.Hreg(1, loopStep);
+   
+  }// else
+   // delay(INTERVAL - (currentMillis - previousMillis)); // correct because places in else statement
+  mb.task();
+  yield();
 }

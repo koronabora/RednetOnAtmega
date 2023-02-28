@@ -19,12 +19,15 @@ String foo;
 /**************
 RS 485
 **************/
-//https://docs.arduino.cc/learn/built-in-libraries/software-serial
-#include <SoftwareSerial.h>
+#define MAX485_RE_DE D2
 
-#define RX_PIN D5
-#define TX_PIN D6
-SoftwareSerial RS485(RX_PIN, TX_PIN);
+void beginTransmission() {
+  digitalWrite(MAX485_RE_DE, HIGH);
+}
+
+void endTransmission() {
+  digitalWrite(MAX485_RE_DE, LOW);
+}
 
 /**************
 I2C Display
@@ -38,6 +41,13 @@ SH1106Wire display(0x3c, SDA, SCL);  // ADDRESS, SDA, SCL
 
 void logToChat(String message) {
   bot.sendMessage(TG_CHAT_ID, message, "");
+}
+
+void sendString(String const& s) {
+    beginTransmission();
+    Serial.println(s);
+    Serial.flush();
+    endTransmission();
 }
 
 String getCurrentTime() {
@@ -76,16 +86,11 @@ void setupDisplay() {
   display.clear();
 }
 
-void setupRS485() {
-  pinMode(RX_PIN, INPUT);
-  pinMode(TX_PIN, OUTPUT);
-  RS485.begin(9600);
-  if (!RS485) {
-    logToChat("Invalid SoftwareSerial pin configuration!");
-    while (1) {
-      delay(1000);
-    }
-  }
+void setupRS485() {  
+  pinMode(MAX485_RE_DE, OUTPUT);
+  digitalWrite(MAX485_RE_DE, LOW); // recieve mode
+  Serial.begin(115200, SERIAL_8N1);
+  Serial.swap();
 }
 
 void setup() {
@@ -97,17 +102,18 @@ void setup() {
 }
 
 void loop() {
+  
+  if (Serial.available() > 0) {
+      foo = Serial.readString();
+      foo.trim();
+      foo = "Readed from RS485: <" + foo + ">";
+      logToChat(foo);
+    }
+  
   if (millis() - bot_lasttime > BOT_MTBS) {
     bot_lasttime = millis();
-
-    foo.clear();
-    while (RS485.available() > 0) {
-      foo.concat(RS485.read());
-    }
-    if (foo.length() > 0)
-      logToChat("Readed from RS485: <" + foo + ">");
-
-    RS485.println(getCurrentTime());
+    
+    sendString(getCurrentTime());
 
     display.clear();
     display.setFont(ArialMT_Plain_10);
@@ -115,4 +121,5 @@ void loop() {
     display.drawString(20, 30, getCurrentTime());
     display.display();
   }
+  
 }
