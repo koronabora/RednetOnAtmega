@@ -1,156 +1,370 @@
+/*
+TODO:
+ - tg magic
+ - in tg gpoup updates by user
+ - modbus magic
+ - check code
+*/
+
 #include <ESP8266WiFi.h>
 #include <WiFiClientSecure.h>
+#include <SoftwareSerial.h>
+
 //https://github.com/witnessmenow/Universal-Arduino-Telegram-Bot
 #include <UniversalTelegramBot.h>
 
+//https://github.com/emelianov/modbus-esp8266
+#include <ModbusRTU.h>
+
+//https://github.com/ThingPulse/esp8266-oled-ssd1306
+#include <Wire.h>
+#include <SH1106Wire.h>
+
 // Add your custom file using "Sketch" -> "Add file"
 #include "data/credentials.h"
+#include "data/common_structs.h"
 
-const unsigned long INTERVAL = 1000;  // delay between main loop steps
+#define GMT_OFFSET            60 * 60 * 3 // GMT+3
+#define INTERVAL              1000        // delay between main loop steps
+#define DISPLAY_LOG_CAPACITY  16          // capacity of display messages logs
 
-X509List cert(TELEGRAM_CERTIFICATE_ROOT);
-WiFiClientSecure secured_client;
-UniversalTelegramBot bot(BOT_TOKEN, secured_client);
-unsigned long currentMillis = 0;
-unsigned long previousMillis = 0;
-String foo;
+#define DEBUG
 
-#define GMT_OFFSET 60 * 60 * 3  // GMT+3
+namespace Glob {
+  X509List cert(TELEGRAM_CERTIFICATE_ROOT);
+  WiFiClientSecure securedClient;
+  UniversalTelegramBot bot(BOT_TOKEN, securedClient);
+  unsigned long currentMillis = 0;
+  unsigned long previousMillis = 0;
+  String logMessages[DISPLAY_LOG_CAPACITY];
+}
+
+/**************
+Debug
+**************/
+namespace Debug {
+#ifdef DEBUG
+  SoftwareSerial debugSerial(RX, TX);
+#endif
+
+  void message(String const& s) {
+#ifdef DEBUG
+    debugSerial.println(Misc::getCurrentDateTime() + ": " + s);
+#endif
+  }
+}
 
 /**************
 RS 485
 **************/
-//https://docs.arduino.cc/learn/built-in-libraries/software-serial
-//#include <SoftwareSerial.h>
-//#define RX_PIN D5
-//#define TX_PIN D6
-//SoftwareSerial RS485(RX_PIN, TX_PIN, false, 128);
-
 #define MAX485_RE_DE D2
+
+namespace RS485 {
+  void setupRS485() {
+    pinMode(MAX485_RE_DE, OUTPUT);
+    digitalWrite(MAX485_RE_DE, LOW); // recieve mode
+    Serial.begin(SERIAL_SPEED);
+    Serial.swap(); // switch pins to GPIO13 and GPIO15
+  }
+}
 
 /**************
 Modbus
 **************/
-//https://github.com/emelianov/modbus-esp8266
-#include <ModbusRTU.h>
-ModbusRTU mb;
+namespace MBus {
+  ModbusRTU mb;
+  
+  void setupModbus() {
+    mb.begin(&Serial, MAX485_RE_DE);
+    mb.setBaudrate(SERIAL_SPEED);
+    mb.cbDisable();
+    mb.client();
+  }
+  
+  void syncBoardsAlarmStates() { // regular sync
+  }
 
-#define NUM_COILS 1 // Security alarm relay state
-#define NUM_DISCRETE_INPUTS 4 // Channels alarm statuses
-#define NUM_INPUT_REGISTERS 4 // Current channels ADC values
-#define NUM_HOLDING_REGISTERS 4 // Parameters for calculating alarm for channels
-
-//#include "ModbusMaster.h"
-//ModbusMaster node;
+  void syncBoardInfo(uint16_t const clientId) { // comlete sync on-demand
+  }
+}
 
 /**************
 I2C Display
 **************/
-//https://github.com/ThingPulse/esp8266-oled-ssd1306
-#include <Wire.h>
-#include <SH1106Wire.h>
-SH1106Wire display(0x3c, SDA, SCL);  // ADDRESS, SDA, SCL
-
-/**************/
-
-void logToChat(String message) {
-  bot.sendMessage(TG_CHAT_ID, message, "");
-}
-
-String getCurrentTime() {
-  time_t now;
-  tm* timeinfo;
-  time(&now);
-  timeinfo = localtime(&now);
-  char buf[20];
-  snprintf(buf, sizeof(buf), "%d-%02d-%02d %02d:%02d:%02d", timeinfo->tm_year + 1900, timeinfo->tm_mon + 1,
-           timeinfo->tm_mday, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
-  return String(buf);
-}
-
-void setupTime() {
-  configTime(GMT_OFFSET, 0, "pool.ntp.org");  // get UTC time via NTP
-  time_t now = time(nullptr);
-  while (now < 24 * 3600) {
-    delay(100);
-    now = time(nullptr);
+namespace Display {
+  
+  SH1106Wire display(0x3c, SDA, SCL);  // ADDRESS, SDA, SCL
+  
+  uint8_t const maxX = 128;
+  uint8_t const maxY = 64;
+  
+  uint8_t const padding = 4;
+  uint8_t const stringHieght = (maxX-padding*2)/(DISPLAY_LOG_CAPACITY+1); // display is flipped
+  
+  void setupDisplay() {
+    display.init();
+    display.flipScreenVertically();
+    display.clear();
   }
-  logToChat("Time synchronized: " + getCurrentTime());
-}
-
-void setupWiFi() {
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  secured_client.setTrustAnchors(&cert);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+  
+  uint8_t justifyToCenter(String const& s) { // don't add padding
+    return (maxY - padding * 2 - s.length())/2;
   }
-}
-
-void setupDisplay() {
-  display.init();
-  display.flipScreenVertically();
-  display.setFont(ArialMT_Plain_10);
-  display.clear();
-}
-
-void setupRS485() {
-  /*pinMode(RX_PIN, INPUT);
-  pinMode(TX_PIN, OUTPUT);
-  RS485.begin(9600, SWSERIAL_8N1);
-  if (!RS485) {
-    logToChat("Invalid SoftwareSerial pin configuration!");
-    while (1) {
-      delay(1000);
-    }
-  }*/
-  pinMode(MAX485_RE_DE, OUTPUT);
-  digitalWrite(MAX485_RE_DE, LOW); // recieve mode
-  Serial.begin(115200, SERIAL_8N1);
-  Serial.swap(); // switch pins to D7 and D8
-}
-
-/*bool cbWrite(Modbus::ResultCode event, uint16_t transactionId, void* data) {
-  Serial.printf_P("Request result: 0x%02X, Mem: %d\n", event, ESP.getFreeHeap());
-  return true;
-}*/
-
-void setupModbus() {
-  mb.begin(&Serial, MAX485_RE_DE);
-  mb.setBaudrate(115200);
-  mb.client();
-  //mb.master();
-  //node.begin(16, RS485);
-}
-
-void setup() {
-  setupWiFi();
-  setupTime();
-  logToChat("Connected to WiFi: " + String(WIFI_SSID));
-  setupDisplay();
-  setupRS485();
-  setupModbus();
-}
-
-uint16_t fooBar;
-uint16_t slaveId = 16;
-void loop() {
-  currentMillis = millis();
-  if (currentMillis - previousMillis >= INTERVAL) {
-    previousMillis = currentMillis;  
-
-    if (!mb.slave()) {
-      uint16_t res = mb.readHreg(slaveId, 1, &fooBar);
-      foo = "Register readed: " + String(fooBar) + ". From slave: " + String(slaveId);
-      logToChat(foo);
-    }
+  
+  void updateDisplay() {
     display.clear();
     display.setFont(ArialMT_Plain_10);
     display.setTextAlignment(TEXT_ALIGN_LEFT);
-    display.drawString(20, 30, getCurrentTime());
+    // Draw datetime
+    String const currentDateTime = Misc::getCurrentDateTime();
+    display.drawString(padding+justifyToCenter(currentDateTime), padding+stringHieght*1, currentDateTime);
+    // Draw messages
+    for (uint16_t i=0; i<DISPLAY_LOG_CAPACITY; ++i)
+      if (logMessages[i].length() > 0)
+        display.drawString(padding, padding+stringHieght*(i+1), logMessages[i]);
     display.display();
-  } //else
-    //delay(INTERVAL - (currentMillis - previousMillis)); // correct because places in else statement
+  }
+}
 
-  mb.task();
+/**************
+Main board data struct
+**************/
+namespace Data {
+  struct BoardStatusStruct {    
+    // Flags
+    bool isAlive = false;
+    bool isAlarmed = false;
+    String lastAlarmTimestamp;
+    
+    // Params
+    bool inUpdateParamsState = false;
+    uint16_t thresholdParamValues[CHANNELS];
+    uint16_t alarmedInputsParamValue = DEF_NUM_OF_ALARMED_INPUTS_TO_START_PANIC;
+    
+    // Channels statuses and values
+    uint16_t channelValues[CHANNELS];
+    bool channelStates[CHANNELS];
+    
+    // -----------
+    BoardStatusStruct() {
+      for (uint8_t i=0; i<CHANNELS; ++i) {
+        thresholdParamValues[i] = DEF_ALARM_THRESHOLD_VAL;
+        thresholdParamValues[i] = 0;
+        thresholdParamStates[i] = false;
+      };
+    };
+    void updateParam(uint16_t tokenIndex, uint16_t const value) {
+      if (value>0) {
+        if (tokenIndex == CHANNELS)
+          alarmedInputsParamValue = value;
+        else if (tokenIndex < CHANNELS)
+          thresholdParamValues[tokenIndex] = value;
+        else
+          Tg::logToChat("Некорректный индекс параметра!");
+      }
+    }
+  };
+
+  BoardStatus boards[MAX_BOARD_ID];
+}
+
+/**************
+Telegram funcs
+**************/
+namespace Tg {
+  String const STATUS_COMMAND = "/status";
+  String const DETAILS_COMMAND = "/details";
+  String const SET_PARAMS_COMMAND = "/set_params";
+  char const PARAMS_DELIM = ' ';
+  
+  String lastCommand;
+  int numNewMessages = 0;
+  String fooBar;
+  uint16_t pos = 0;
+  uint16_t token = 0;
+  uint16_t fooVal = 0;
+  int8_t index = -1;
+  
+  void logToChat(String message) {
+    bot.sendMessage(TG_CHAT_ID, message, "");
+  }
+
+  void sendBoardInfo(uint16_t const clientId) {
+    if (clientId >= MAX_BOARD_ID) {
+      logToChat("Некорректный номер платы: " + String(clientId));
+      return;
+    }
+    fooBar = "#" + String(clientId+1);
+    fooBar.append( " - активен: " + Data::boards[clientId].isAlive ? "да" : "нет");
+    fooBar.append( " - тревога: " + Data::boards[clientId].isAlarmed ? "да" : "нет");
+    fooBar.append( " - последняя тревога: " + Data::boards[clientId].lastAlarmTimestamp);
+    fooBar.append("-------------------------");
+    fooBar.append( " - ожидание применения параметров: " + Data::boards[clientId].inUpdateParamsState ? "да" : "нет");
+    fooBar.append( " - параметры ADC: " + Misc::formatArray(&Data::boards[clientId].thresholdParamValues, CHANNELS));
+    fooBar.append( " - каналов в тревоге для срабатывания: " + String(Data::boards[clientId].alarmedInputsParamValue));
+    fooBar.append("-------------------------");
+    fooBar.append( " - значения по-каналам: " + Misc::formatArray<uint16_t>(&Data::boards[clientId].channelValues, CHANNELS));
+    fooBar.append( " - состояния по-каналам: " + Misc::formatArray<bool>(&Data::boards[clientId].channelStates, CHANNELS));
+    bot.sendMessage(TG_CHAT_ID, fooBar, "");
+  }
+
+  void sendStatuses() {
+    for (uint8_t i=0; i<MAX_BOARD_ID; ++i)
+      if (Data::boards[clientId].isAlive) {
+        fooBar = "#" + String(clientId+1);
+        fooBar.append( " - тревога: " + Data::boards[clientId].isAlarmed ? "да" : "нет");
+        fooBar.append( " - последняя тревога: " + Data::boards[clientId].lastAlarmTimestamp);
+        fooBar.append("-------------------------");
+      }
+  }
+  
+  void updateParamsFromString(String const& s) {
+    pos = 0;
+    fooBar = "";
+    fooVal = 0;
+    index = -1;
+    while (pos<s.length()) {
+      if (s[pos] == PARAMS_DELIM) {
+        if (fooBar.length() > 0) {
+          Debug::message("Parsing token: " + fooBar);
+          fooVal = fooBar.toInt();
+          if (index>=0) { // adc borders and other params
+            Data::boards[index].updateParam(index, fooVal);
+            ++index;
+          } else {
+            index = fooVal; // first param - id of board
+          }
+        } else {
+          Debug::message("Empty token at pos <" + String(pos) + "> in string <" + s + ">");
+        }
+      } else {
+        fooBar.append(s[pos]);
+      }
+      ++pos;
+    }
+  }
+  
+  void handleNewMessages() {
+    for (int i = 0; i < numNewMessages; i++) {
+      String const& chat_id = bot.messages[i].chat_id;
+      String const& text = bot.messages[i].text;
+      if (text.length() > 0) {
+        if (text == STATUS_COMMAND) {
+          sendStatuses(); // modbus values already updated in main loop
+        } else if (text == DETAILS_COMMAND) {
+          bot.sendMessage(chat_id, "Введите номер платы");
+        } else if (text == SET_PARAMS_COMMAND) {
+          bot.sendMessage(chat_id, "Введите через пробел номер платы и параметры (сначала границы ADC, потом кол-во входов для срабатывания). Ноль не применяется.");
+        } else { // Try to parse board id after details or set_params command
+          if (lastCommand == DETAILS_COMMAND) { // send board info
+            MBus::syncBoardInfo(); // full values update
+            sendBoardInfo(static_cast<uint16_t>(lastAlarmTimestamp.toInt()));
+          } else if (lastCommand == SET_PARAMS_COMMAND) {
+            updateParamsFromString(text);
+          } else {
+            bot.sendMessage(chat_id, "Некорректный запрос <" + text + ">");
+          }
+        }
+        lastCommand = text;
+      }
+    }
+  }
+
+  void checkForBotUpdates() {
+    numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    while (numNewMessages>0) {
+      handleNewMessages();
+      numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    }
+  }
+}
+
+/**************
+Time & wifi funcs
+**************/
+namespace Misc {
+  using namespace Global;
+
+  String getCurrentDateTime() {
+    time_t now;
+    tm* timeinfo;
+    time(&now);
+    timeinfo = localtime(&now);
+    char buf[20];
+    snprintf(buf, sizeof(buf), "%d-%02d-%02d %02d:%02d:%02d", timeinfo->tm_year + 1900, timeinfo->tm_mon + 1,
+             timeinfo->tm_mday, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+    return String(buf);
+  }
+  
+  String getCurrentTime() {
+    time_t now;
+    tm* timeinfo;
+    time(&now);
+    timeinfo = localtime(&now);
+    char buf[9];
+    snprintf(buf, sizeof(buf), "%02d:%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+    return String(buf);
+  }
+
+  void setupTime() {
+    configTime(GMT_OFFSET, 0, "pool.ntp.org");  // get UTC time via NTP
+    time_t now = time(nullptr);
+    while (now < 24 * 3600) {
+      delay(100);
+      now = time(nullptr);
+    }
+    Tg::logToChat("Time synchronized: " + getCurrentTime());
+  }
+
+  void setupWiFi() {
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    securedClient.setTrustAnchors(&cert);
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+    }
+  }
+
+  template<typename T>
+  String formatArray(T const* arr, size_t len) const {
+    if (!arr)
+      return nullptr;
+    String res = "[";
+    for (size_t i=0; i<len; ++i) {
+      res.append(String(arr[i]));
+      if ((i+1) != len)
+        res.append(", ");
+    }
+    res.append("]");
+    return res;
+  }
+}
+
+/**************/
+
+void setup() {
+#ifdef DEBUG
+  debugSerial.begin(SERIAL_SPEED);
+#endif
+  
+  Debug::message("Initialization started");
+  Misc::setupWiFi();
+  Misc::setupTime();
+  Tg::logToChat("Connected to WiFi: " + String(WIFI_SSID));
+  Display::setupDisplay();
+  RS485::setupRS485();
+  MBus::setupModbus();
+  Debug::message("Initialization finished");
+}
+
+void loop() {
+  Glob::currentMillis = millis();
+  if (Glob::currentMillis - Glob::previousMillis >= INTERVAL) {
+    Glob::previousMillis = Glob::currentMillis;  
+    Debug::message("Sync step");
+    MBus::syncBoardsAlarmStates();
+    Tg::checkForBotUpdates();
+    Display::updateDisplay();
+  } 
+  MBus::mb.task();
   yield();
 }

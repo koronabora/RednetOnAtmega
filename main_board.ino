@@ -1,10 +1,12 @@
-#define CHANNELS 4
+// Add your custom file using "Sketch" -> "Add file"
+#include "data/common_structs.h" //CHANNELS defined here 
 
 const int t[CHANNELS+1] = {A4, A5, A7, A6, A2}; // pins + relay
 const int tLed[CHANNELS+1] = {8, 7, 4, 3}; // pins
 #define RELAY CHANNELS // relay out index in t array
 
-#define INTERVAL 2000 // interval check in miliseconds
+#define INTERVAL 200 // interval check in miliseconds
+#define ALARM_RELAY_ENABLE_PERIOD 3000 // 3 seconds of enabled relay
 
 /**************
 Variables
@@ -12,18 +14,19 @@ Variables
 
 unsigned long currentMillis = 0;
 unsigned long previousMillis = 0;
+unsigned long alarmStartMillis = 0;
 
 // variables for adc vals 
 int adc[CHANNELS] = {};
 
 uint8_t alarmed_inputs = 0; //   Переменная которая каждый раз в цикле хранит количество датчиков которые находятся в состоянии тревоги
-const uint8_t ALARM_STARTS_BORDER = 3; // Сколько датчиков должны сработать для активации реле
+uint16_t ALARM_STARTS_BORDER = DEF_NUM_OF_ALARMED_INPUTS_TO_START_PANIC; // Сколько датчиков должны сработать для активации реле. Меняется через modbus
 bool isAlarm = false;
 
 const int BUF_CAP = 10; // Длина буфера
 const int ADC_MAX_VAL = 1023; // Максимальное значение в буфере. Инициализируем им буфер чтобы алгоритм не сработал в самом начале после старта ллаты
 const int ALARM_VAL_COUNT = 70; // Какой процент значений в буфере должны быть ниже порогового для срабатывания тревоги по этому каналу 
-const int ALARM_THRESHOLD_VAL = 100; // Пороговое значние, ниже которого считается что пропал сигнал с датчика
+uint16_t ALARM_THRESHOLD_VAL[CHANNELS] = {DEF_ALARM_THRESHOLD_VAL, DEF_ALARM_THRESHOLD_VAL, DEF_ALARM_THRESHOLD_VAL, DEF_ALARM_THRESHOLD_VAL}; // Пороговое значние, ниже которого считается что пропал сигнал с датчика. Может управляться через modbus
 
 int b[CHANNELS][BUF_CAP] = {{}};
 uint16_t state = 0, prevState = 0;
@@ -33,26 +36,22 @@ String foo;
 Buffers suite
 **************/
 
-void initBuffer(int* buf) {
-  if (buf!=0)
-      for (int i=0; i<BUF_CAP; ++i)
-        buf[i] = ADC_MAX_VAL;
+void initBuffer(uint8_t const index) {
+  for (int i=0; i<BUF_CAP; ++i)
+    b[index][i] = ADC_MAX_VAL;
 }
 
-void updateBuffer(int* buf, const int& v) {
-   if (buf!=0) {
-       for (int i=0; i<BUF_CAP-1; ++i)
-          buf[i] = buf[i+1];
-       buf[BUF_CAP-1] = v;
-   }
+void updateBuffer(uint8_t const index) {
+  for (int i=0; i<BUF_CAP-1; ++i)
+    b[index][i] = b[index][i+1];
+  b[index][BUF_CAP-1] = adc[index];
 }
 
-bool checkBuffer(const int* buf) {
+bool checkBuffer(uint8_t const index) {
   int t_vals = 0;
-  if (buf!=0)
-      for (int i=0; i<BUF_CAP; i++)
-        if (buf[i] < ALARM_THRESHOLD_VAL)
-          t_vals++;
+  for (int i=0; i<BUF_CAP; i++)
+    if (b[index][i] < ALARM_THRESHOLD_VAL[index])
+      t_vals++;
   if (t_vals>(BUF_CAP*(ALARM_VAL_COUNT/100.0)))
     return true;
   return false; 
@@ -77,12 +76,7 @@ Modbus
 #include <ModbusRTU.h>
 ModbusRTU mb;
 
-#define SLAVE_ID 16
-
-#define NUM_COILS 1 // Security alarm relay state
-#define NUM_DISCRETE_INPUTS 4 // Channels alarm statuses
-#define NUM_INPUT_REGISTERS 4 // Current channels ADC values
-#define NUM_HOLDING_REGISTERS 4 // Parameters for calculating alarm for channels
+#define SLAVE_ID 0 // Each board have to have it's own id. Not grater than MAX_BOARD_ID
 
 /**************
 Bitmasks
@@ -119,7 +113,7 @@ void decodeStates(uint16_t const state, bool& isAlarm, bool* inputStates) {
 
 void setupSerial() {
   pinMode(MAX485_RE_DE, OUTPUT);
-  Serial.begin(115200, SERIAL_8N1);
+  Serial.begin(SERIAL_SPEED);
 }
 
 void setupMisc() {
@@ -127,7 +121,7 @@ void setupMisc() {
     pinMode(tLed[i], OUTPUT); 
   pinMode(t[RELAY], OUTPUT);   
   for (uint8_t i=0; i<CHANNELS; ++i)
-    initBuffer(b[i]);
+    initBuffer(i);
   // Turn on leds for 3secs
   for (uint8_t i=0; i<CHANNELS; ++i)
     digitalWrite(tLed[i], HIGH);
@@ -137,45 +131,59 @@ void setupMisc() {
 }
 
 void setupModbus() {
-  mb.begin(&Serial, MAX485_RE_DE);  //or use RX/TX direction control pin (if required)
-  mb.setBaudrate(115200);
+  // modbus io
+  mb.begin(&Serial, MAX485_RE_DE);
+  mb.setBaudrate(SERIAL_SPEED);
+  mb.cbDisable();
   mb.server(SLAVE_ID);
-  mb.addHreg(1, 64);
+  
+  // modbus data
+  mb.addCoil(g_getCoilAddress(0), false, COILS_AMOUNT); // COILS_AMOUNT
+  mb.addIsts(g_getDiscreteInputAddress(0), 0, DISCRETE_INPUTS_AMOUNT); // DISCRETE_INPUTS_AMOUNT
+  mb.addIreg(g_getInputRegisterAddress(0), 0, INPUT_REGISTERS_AMOUNT); // INPUT_REGISTERS_AMOUNT
+  mb.addHreg(g_getHoldingRegisterAddress(0), 0, HOLDING_REGISTERS_AMOUNT); // HOLDING_REGISTERS_AMOUNT
 }
 
 void setup() {
   setupSerial();
   setupMisc();
   setupModbus();
+  
+  setStartFlag();
 }
 
-void sendState(int16_t val) {
-    preTransmission();
-    Serial.println(String(state));
-    postTransmission();
+void syncParamsFromModbus() {
+  if (Coil(g_getCoilAddress(UPDATE_PARAMS_COIL))) {
+    ALARM_STARTS_BORDER = Hreg(g_getHoldingRegisterAddress(ALARM_STARTS_BORDER_REGISTER)); // update amount inputs for activating alarm
+    for (uint8_t i=0; i<CHANNELS; ++i) // read register values into our buffer
+      ALARM_THRESHOLD_VAL[i] = Hreg(g_getHoldingRegisterAddress(i));
+    Coil(g_getCoilAddress(UPDATE_PARAMS_COIL), false); // change flag status to notify that new values readed and applied
+  }
 }
 
-void sendString(String const& s) {
-    preTransmission();
-    Serial.println(s);
-    postTransmission();
+void setStartFlag() {
+  Coil(g_getCoilAddress(JUST_STARTED_COIL), true);
 }
 
 void checkADCs() {
-  for (uint8_t i=0; i<CHANNELS; ++i)
+  for (uint8_t i=0; i<CHANNELS; ++i) {
     adc[i]=analogRead(t[i]);
+    Ireg(g_getInputRegisterAddress(i), adc[i]);
+  }
 
   for (uint8_t i=0; i<CHANNELS; ++i)
-    updateBuffer(b[i], adc[i]);
+    updateBuffer(i);
 
   for (uint8_t i=0; i<CHANNELS; ++i) {
-    if (checkBuffer(b[i])) {
+    if (checkBuffer(i)) {
       digitalWrite(tLed[i],HIGH); 
       state |= CH_STATE_MASKS[i]; // enable
+      Ists(g_getDiscreteInputAddress(i), false);
     }
     else {
       digitalWrite(tLed[i],LOW);
       state &= ~CH_STATE_MASKS[i]; // disable
+      Ists(g_getDiscreteInputAddress(i), true);
     }
   }
 
@@ -184,25 +192,29 @@ void checkADCs() {
     if (state & CH_STATE_MASKS[i])
       alarmed_inputs++;
 
-  state &= ~ALARM_STATE_MASK; // disable
-  if (alarmed_inputs>=ALARM_STARTS_BORDER)
+  if (alarmed_inputs>=ALARM_STARTS_BORDER) {
     state |= ALARM_STATE_MASK; // enable
+    Ists(ALARM_DISCRETE_INPUT, true);
+  } else {
+    Ists(ALARM_DISCRETE_INPUT, false);
+    state &= ~ALARM_STATE_MASK; // disable
+  }
 }
 
-uint16_t loopStep = 0;
 void loop() {
   currentMillis = millis();
   if (currentMillis - previousMillis >= INTERVAL) {
     previousMillis = currentMillis;  
-
+    syncParamsFromModbus();
     checkADCs();
     prevState = state;
-    
-    loopStep++;
-    mb.Hreg(1, loopStep);
-   
-  }// else
-   // delay(INTERVAL - (currentMillis - previousMillis)); // correct because places in else statement
+    if (state & ALARM_STATE_MASK) { // alarm started or active now
+      alarmStartedMillis = currentMillis;
+      digitalWrite(t[RELAY], HIGH); // turn on the alarm relay
+    } else if (currentMillis - alarmStartedMillis >= ALARM_RELAY_ENABLE_PERIOD) {
+      digitalWrite(t[RELAY], LOW);  // turn off the alarm relay
+    }    
+  }
   mb.task();
   yield();
 }
