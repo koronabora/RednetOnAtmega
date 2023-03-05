@@ -1,7 +1,7 @@
 #ifndef COMMON_STRUCTS_H
 #define COMMON_STRUCTS_H
 
-#define MAX_BOARD_ID 32
+#define MAX_BOARD_ID 8
 
 #define CHANNELS 4
 
