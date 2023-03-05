@@ -26,20 +26,20 @@
 #define DEF_NUM_OF_ALARMED_INPUTS_TO_START_PANIC 3
 #define SERIAL_SPEED 115200
 
-inline uint16_t g_getCoilAddress(uint16_t const coil) const {
-  return 10+coilNum;
+inline uint16_t g_getCoilAddress(uint16_t const coil) {
+  return 10 + coil;
 };
 
-inline uint16_t g_getDiscreteInputAddress(uint16_t const discreteInput) const {
-  return 100+coilNum;
+inline uint16_t g_getDiscreteInputAddress(uint16_t const discreteInput) {
+  return 100 + discreteInput;
 };
 
-inline uint16_t g_getInputRegisterAddress(uint16_t const inputRegister) const {
-  return 1000+coilNum;
+inline uint16_t g_getInputRegisterAddress(uint16_t const inputRegister) {
+  return 1000 + inputRegister;
 };
 
-inline uint16_t g_getHoldingRegisterAddress(uint16_t const holdingRegister) const {
-  return 10000+coilNum;
+inline uint16_t g_getHoldingRegisterAddress(uint16_t const holdingRegister) {
+  return 10000 + holdingRegister;
 };
 
 #endif

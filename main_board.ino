@@ -1,5 +1,5 @@
 // Add your custom file using "Sketch" -> "Add file"
-#include "data/common_structs.h" //CHANNELS defined here 
+#include "common_structs.h" //CHANNELS defined here 
 
 const int t[CHANNELS+1] = {A4, A5, A7, A6, A2}; // pins + relay
 const int tLed[CHANNELS+1] = {8, 7, 4, 3}; // pins
@@ -14,7 +14,7 @@ Variables
 
 unsigned long currentMillis = 0;
 unsigned long previousMillis = 0;
-unsigned long alarmStartMillis = 0;
+unsigned long alarmStartedMillis = 0;
 
 // variables for adc vals 
 int adc[CHANNELS] = {};
@@ -125,7 +125,12 @@ void setupMisc() {
   // Turn on leds for 3secs
   for (uint8_t i=0; i<CHANNELS; ++i)
     digitalWrite(tLed[i], HIGH);
+  
+  
+  digitalWrite(t[RELAY], HIGH);
   delay(3000);
+  digitalWrite(t[RELAY], LOW);
+  
   for (uint8_t i=0; i<CHANNELS; ++i)
     digitalWrite(tLed[i], LOW);
 }
@@ -153,22 +158,22 @@ void setup() {
 }
 
 void syncParamsFromModbus() {
-  if (Coil(g_getCoilAddress(UPDATE_PARAMS_COIL))) {
-    ALARM_STARTS_BORDER = Hreg(g_getHoldingRegisterAddress(ALARM_STARTS_BORDER_REGISTER)); // update amount inputs for activating alarm
+  if (mb.Coil(g_getCoilAddress(UPDATE_PARAMS_COIL))) {
+    ALARM_STARTS_BORDER = mb.Hreg(g_getHoldingRegisterAddress(ALARM_STARTS_BORDER_REGISTER)); // update amount inputs for activating alarm
     for (uint8_t i=0; i<CHANNELS; ++i) // read register values into our buffer
-      ALARM_THRESHOLD_VAL[i] = Hreg(g_getHoldingRegisterAddress(i));
-    Coil(g_getCoilAddress(UPDATE_PARAMS_COIL), false); // change flag status to notify that new values readed and applied
+      ALARM_THRESHOLD_VAL[i] = mb.Hreg(g_getHoldingRegisterAddress(i));
+    mb.Coil(g_getCoilAddress(UPDATE_PARAMS_COIL), false); // change flag status to notify that new values readed and applied
   }
 }
 
 void setStartFlag() {
-  Coil(g_getCoilAddress(JUST_STARTED_COIL), true);
+  mb.Coil(g_getCoilAddress(JUST_STARTED_COIL), true);
 }
 
 void checkADCs() {
   for (uint8_t i=0; i<CHANNELS; ++i) {
     adc[i]=analogRead(t[i]);
-    Ireg(g_getInputRegisterAddress(i), adc[i]);
+    mb.Ireg(g_getInputRegisterAddress(i), adc[i]);
   }
 
   for (uint8_t i=0; i<CHANNELS; ++i)
@@ -178,12 +183,12 @@ void checkADCs() {
     if (checkBuffer(i)) {
       digitalWrite(tLed[i],HIGH); 
       state |= CH_STATE_MASKS[i]; // enable
-      Ists(g_getDiscreteInputAddress(i), false);
+      mb.Ists(g_getDiscreteInputAddress(i), false);
     }
     else {
       digitalWrite(tLed[i],LOW);
       state &= ~CH_STATE_MASKS[i]; // disable
-      Ists(g_getDiscreteInputAddress(i), true);
+      mb.Ists(g_getDiscreteInputAddress(i), true);
     }
   }
 
@@ -194,9 +199,9 @@ void checkADCs() {
 
   if (alarmed_inputs>=ALARM_STARTS_BORDER) {
     state |= ALARM_STATE_MASK; // enable
-    Ists(ALARM_DISCRETE_INPUT, true);
+    mb.Ists(ALARM_DISCRETE_INPUT, true);
   } else {
-    Ists(ALARM_DISCRETE_INPUT, false);
+    mb.Ists(ALARM_DISCRETE_INPUT, false);
     state &= ~ALARM_STATE_MASK; // disable
   }
 }
