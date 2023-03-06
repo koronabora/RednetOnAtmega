@@ -306,7 +306,7 @@ namespace Tg {
 
   void sendBoardInfo(uint16_t const clientId, String const& chatId) {
     if (clientId >= MAX_BOARD_ID) {
-      logToChat("Некорректный номер платы: " + String(clientId));
+      bot.sendMessage(chatId, "Некорректный номер платы: " + String(clientId), "");
       return;
     }
     fooBar = "#" + String(clientId+1) + "\n";
@@ -324,6 +324,7 @@ namespace Tg {
   }
 
   void sendStatuses(String const& chatId) {
+    logToChat("Status sending");
     fooBar = "";
     pos = 0;
     for (uint8_t i=0; i<MAX_BOARD_ID; ++i)
@@ -334,7 +335,7 @@ namespace Tg {
         fooBar.concat(LINE_SPLITTER + "\n");
         ++pos;
       }
-    fooBar.append("Всего " + String(pos) + " плат");
+    fooBar.concat("Всего " + String(pos) + " плат");
     bot.sendMessage(chatId, fooBar, "");
   }
   
